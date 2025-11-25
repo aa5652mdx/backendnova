@@ -1,115 +1,92 @@
-// ===========================
-// EduNova1git push --force origin main School Backend API
-// ===========================
+// --- Imports ---
+const express = require('express');
+const mongoose = require('mongoose');
+const cors = require('cors'); // <--- ADD THIS LINE
+require('dotenv').config();
 
-import express from "express";
-import cors from "cors";
-import { MongoClient, ObjectId } from "mongodb";
-import dotenv from "dotenv";
-import fs from "fs";
-import path from "path";
-
-dotenv.config();
 const app = express();
 const port = process.env.PORT || 3000;
 
-// ===== Middleware =====
-app.use(cors());
+// --- Middleware ---
 app.use(express.json());
+app.use(cors()); // <--- ADD THIS LINE: Allows frontend to connect
 
-// Logger middleware (4%)
-app.use((req, res, next) => {
-  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
-  next();
+// --- MongoDB Connection ---
+mongoose.connect(process.env.MONGODB_URI, { ssl: true }) // You fixed this line previously!
+    .then(() => console.log('✅ Connected to MongoDB: edunovaDB'))
+    .catch(err => console.error('❌ Failed to connect to MongoDB', err));
+
+// --- Schemas (You have these) ---
+const Lesson = mongoose.model('Lesson', {
+    subject: String,
+    location: String,
+    price: Number,
+    spaces: Number,
+    icon: String,
+    description: String
 });
 
-// Static file middleware for images (4%)
-const imageDir = path.join(process.cwd(), "images");
-app.use("/images", express.static(imageDir));
-app.use("/images", (req, res) => {
-  res.status(404).json({ error: "Image not found" });
+const Order = mongoose.model('Order', {
+    name: String,
+    phone: String,
+    lessonIDs: Array,
+    total: Number,
+    date: Date
 });
 
-// ===== MongoDB Connection =====
-const uri = process.env.MONGODB_URI || "mongodb://127.0.0.1:27017";
-const client = new MongoClient(uri);
-const dbName = "edunovaDB";
-let lessonsCollection, ordersCollection;
+// --- Routes ---
 
-async function connectDB() {
-  await client.connect();
-  const db = client.db(dbName);
-  lessonsCollection = db.collection("lessons");
-  ordersCollection = db.collection("orders");
-  console.log("✅ Connected to MongoDB:", dbName);
-}
-connectDB().catch(console.error);
-
-// ===== Routes =====
-
-// GET /lessons — returns all lessons (3%)
-app.get("/lessons", async (req, res) => {
-  try {
-    const lessons = await lessonsCollection.find().toArray();
-    res.json(lessons);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+// GET / - Root route check
+app.get('/', (req, res) => {
+    res.send('EduNova Backend API is running 🚀');
 });
 
-// GET /search?q=term — full-text search (7%)
-app.get("/search", async (req, res) => {
-  const query = req.query.q?.toLowerCase() || "";
-  try {
-    const lessons = await lessonsCollection
-      .find({
-        $or: [
-          { subject: { $regex: query, $options: "i" } },
-          { location: { $regex: query, $options: "i" } },
-          { price: { $regex: query, $options: "i" } },
-          { spaces: { $regex: query, $options: "i" } },
-        ],
-      })
-      .toArray();
-    res.json(lessons);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// POST /orders — save a new order (4%)
-app.post("/orders", async (req, res) => {
-  try {
-    const order = req.body;
-    if (!order.name || !order.phone || !order.lessonIDs) {
-      return res.status(400).json({ error: "Invalid order data" });
+// GET /lessons - Fetch all lessons
+app.get('/lessons', async (req, res) => {
+    try {
+        const lessons = await Lesson.find({});
+        res.json(lessons);
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to fetch lessons' });
     }
-    const result = await ordersCollection.insertOne(order);
-    res.status(201).json({ message: "Order saved", id: result.insertedId });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
 });
 
-// PUT /lessons/:id — update lesson availability (5%)
-app.put("/lessons/:id", async (req, res) => {
-  try {
-    const id = new ObjectId(req.params.id);
-    const update = req.body;
-    const result = await lessonsCollection.updateOne({ _id: id }, { $set: update });
-    if (result.modifiedCount === 0) {
-      return res.status(404).json({ error: "Lesson not found" });
+// PUT /lessons/:id - Update lesson spaces
+app.put('/lessons/:id', async (req, res) => {
+    try {
+        const lessonId = req.params.id;
+        const newSpaces = req.body.spaces;
+        
+        const updatedLesson = await Lesson.findByIdAndUpdate(
+            lessonId,
+            { spaces: newSpaces },
+            { new: true }
+        );
+        
+        if (!updatedLesson) {
+            return res.status(404).json({ error: 'Lesson not found' });
+        }
+        
+        res.status(200).json(updatedLesson);
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to update lesson spaces' });
     }
-    res.json({ message: "Lesson updated" });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
 });
 
-// Root check
-app.get("/", (req, res) => {
-  res.send("EduNova Backend API is running 🚀");
+
+// POST /orders - Create a new order
+app.post('/orders', async (req, res) => {
+    try {
+        const newOrder = new Order(req.body);
+        await newOrder.save();
+        res.status(201).json(newOrder);
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to create order' });
+    }
 });
 
-// ===== Start Server =====
-app.listen(port, () => console.log(`✅ Server running on port ${port}`));
+
+// --- Start Server ---
+app.listen(port, () => {
+    console.log(`Server running on port ${port}`);
+});
