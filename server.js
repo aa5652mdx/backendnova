@@ -1,22 +1,23 @@
-// --- Imports ---
-const express = require('express');
-const mongoose = require('mongoose');
-const cors = require('cors'); // <--- ADD THIS LINE
-require('dotenv').config();
+import express from 'express';
+import mongoose from 'mongoose';
+import cors from 'cors'; // <-- Critical for allowing local frontend connection
+import 'dotenv/config'; 
 
 const app = express();
 const port = process.env.PORT || 3000;
 
 // --- Middleware ---
 app.use(express.json());
-app.use(cors()); // <--- ADD THIS LINE: Allows frontend to connect
+
+// Apply CORS middleware to allow requests from all origins (including local file:/// path)
+app.use(cors()); 
 
 // --- MongoDB Connection ---
-mongoose.connect(process.env.MONGODB_URI, { ssl: true }) // You fixed this line previously!
+mongoose.connect(process.env.MONGODB_URI, { ssl: true }) 
     .then(() => console.log('✅ Connected to MongoDB: edunovaDB'))
     .catch(err => console.error('❌ Failed to connect to MongoDB', err));
 
-// --- Schemas (You have these) ---
+// --- Schemas ---
 const Lesson = mongoose.model('Lesson', {
     subject: String,
     location: String,
@@ -44,6 +45,7 @@ app.get('/', (req, res) => {
 // GET /lessons - Fetch all lessons
 app.get('/lessons', async (req, res) => {
     try {
+        // Fetch lessons, which should exist in the 'lessons' collection you showed me
         const lessons = await Lesson.find({});
         res.json(lessons);
     } catch (err) {
@@ -89,4 +91,4 @@ app.post('/orders', async (req, res) => {
 // --- Start Server ---
 app.listen(port, () => {
     console.log(`Server running on port ${port}`);
-});
+});git add server.js
