@@ -1,20 +1,46 @@
-// --- Dependencies (using ES Module import syntax) ---
 import express from 'express';
 import mongoose from 'mongoose';
 import cors from 'cors'; 
 import 'dotenv/config'; 
-
-import { Types } from 'mongoose';
+import { ObjectId } from 'mongodb'; // Import ObjectId for BSON checks
 
 const app = express();
-const port = process.env.PORT || 3000;
+// Render sets the PORT environment variable automatically
+const port = process.env.PORT || 3000; 
+const MONGODB_URI = process.env.MONGODB_URI;
+
+// Flag to track database connection status globally
+let dbConnectionError = false;
 
 // --- Middleware ---
 app.use(express.json());
+// Allow requests from all origins (CORS is essential for GitHub Pages to talk to Render)
 app.use(cors()); 
 
+// --- MongoDB Connection & Seeding ---
+if (!MONGODB_URI) {
+    console.error('❌ FATAL ERROR: MONGODB_URI is not defined.');
+    // Exit if the critical environment variable is missing
+    process.exit(1); 
+}
+
+// Attempt the connection, logging the result
+const dbConnectionPromise = mongoose.connect(MONGODB_URI, { 
+    ssl: true,
+    // Give Render more time to establish the connection
+    serverSelectionTimeoutMS: 10000 
+}) 
+    .then(() => console.log('✅ Connected to MongoDB: edunovaDB'))
+    .catch(err => {
+        // This log MUST appear in Render's logs if the connection fails
+        console.error('❌ FAILED TO CONNECT TO MONGODB. CHECK MONGODB_URI AND NETWORK ACCESS:', err.message);
+        dbConnectionError = true; 
+        // DO NOT EXIT: allow the server to start, but block API access
+    });
+
+
 // --- Schemas ---
-const LessonSchema = new mongoose.Schema({
+const Lesson = mongoose.model('Lesson', {
     subject: String,
     location: String,
     price: Number,
@@ -23,130 +49,150 @@ const LessonSchema = new mongoose.Schema({
     description: String
 });
 
-const Lesson = mongoose.model('Lesson', LessonSchema);
-
-const OrderItemSchema = new mongoose.Schema({
-    lessonId: { type: Types.ObjectId, required: true }, 
-    subject: { type: String, required: true },
-    price: { type: Number, required: true },
-    qty: { type: Number, required: true }
-});
-
 const Order = mongoose.model('Order', {
-    name: { type: String, required: true },
-    phone: { type: String, required: true },
-    items: [OrderItemSchema],
-    total: { type: Number, required: true },
-    date: { type: Date, default: Date.now } 
+    name: String,
+    phone: String,
+    lessonIDs: Array,
+    total: Number,
+    date: Date
 });
 
-
-// --- Initial Lesson Data (Seeding Data) ---
-const initialLessons = [
-    { subject: "Mathematics", location: "London", price: 100, spaces: 5, icon: "fa-calculator", description: "Advanced calculus and algebra." },
-    { subject: "Physics", location: "Paris", price: 120, spaces: 3, icon: "fa-atom", description: "Quantum mechanics and thermodynamics." },
-    { subject: "Chemistry", location: "New York", price: 90, spaces: 7, icon: "fa-flask", description: "Organic and inorganic chemistry." },
-    { subject: "English Literature", location: "Tokyo", price: 80, spaces: 10, icon: "fa-book-open", description: "Shakespeare and modern poetry." },
-    { subject: "History", location: "Rome", price: 95, spaces: 6, icon: "fa-landmark", description: "Ancient civilizations and world wars." },
-    { subject: "Computer Science", location: "Berlin", price: 150, spaces: 2, icon: "fa-code", description: "Data structures and algorithms." },
-    { subject: "Art", location: "Madrid", price: 75, spaces: 8, icon: "fa-palette", description: "Drawing, painting, and digital art." },
-    { subject: "Music Theory", location: "Sydney", price: 110, spaces: 4, icon: "fa-music", description: "Harmony, counterpoint, and composition." },
-];
-
-/**
- * Function to check if the database is empty and insert initial data.
- */
-async function seedDatabase() {
+// --- Database Seeding Function ---
+const seedDatabase = async () => {
     try {
-        const count = await Lesson.countDocuments();
-        if (count === 0) {
+        await dbConnectionPromise; // Wait for the connection attempt to resolve
+        if (dbConnectionError) return; // Stop seeding if connection failed
+
+        const lessonCount = await Lesson.countDocuments();
+        if (lessonCount === 0) {
+            console.log('⏳ Database is empty. Seeding 8 lessons...');
+            const initialLessons = [
+                { subject: "Mathematics", location: "London", price: 100, spaces: 5, icon: "fa-calculator", description: "Advanced calculus and algebra." },
+                { subject: "Physics", location: "Manchester", price: 120, spaces: 5, icon: "fa-atom", description: "Quantum mechanics and thermodynamics." },
+                { subject: "Chemistry", location: "Birmingham", price: 90, spaces: 5, icon: "fa-flask", description: "Organic and inorganic chemistry." },
+                { subject: "Biology", location: "London", price: 80, spaces: 5, icon: "fa-dna", description: "Cellular structure and genetics." },
+                { subject: "History", location: "Liverpool", price: 70, spaces: 5, icon: "fa-scroll", description: "World history from ancient to modern times." },
+                { subject: "English Literature", location: "Leeds", price: 75, spaces: 5, icon: "fa-book-open", description: "Classic novels and poetry analysis." },
+                { subject: "Computer Science", location: "London", price: 150, spaces: 5, icon: "fa-code", description: "Data structures and algorithms." },
+                { subject: "Art History", location: "Bristol", price: 65, spaces: 5, icon: "fa-palette", description: "Survey of major art movements." }
+            ];
             await Lesson.insertMany(initialLessons);
-            console.log('✨ Database seeded successfully with initial lessons.');
+            console.log('✅ Database seeded successfully with 8 lessons.');
         } else {
-            console.log(`✅ Lessons collection already contains ${count} documents. No seeding performed.`);
+            console.log(`ℹ️ Database already contains ${lessonCount} lessons. No seeding required.`);
         }
     } catch (error) {
-        console.error('❌ Database seeding failed:', error);
+        console.error('❌ Error during database seeding/check:', error.message);
     }
-}
+};
 
-// --- MongoDB Connection ---
-const MONGODB_URI = process.env.MONGODB_URI;
-if (!MONGODB_URI) {
-    console.error('❌ FATAL ERROR: MONGODB_URI is undefined. Check your environment variables.');
-    process.exit(1); 
-}
-
-mongoose.connect(MONGODB_URI, {}) 
-    .then(() => {
-        console.log('✅ Connected to MongoDB: edunovaDB');
-        // Execute seeding function after successful connection
-        seedDatabase(); 
-    })
-    .catch(err => console.error('❌ Failed to connect to MongoDB', err));
+// Start the seeding process
+seedDatabase();
 
 
 // --- Routes ---
+
+// Health Check Route (Crucial for verifying database connection status)
+app.get('/status', async (req, res) => {
+    // Return 503 if the connection failed
+    if (dbConnectionError) {
+        return res.status(503).json({ 
+            status: "ERROR", 
+            dbReadyState: mongoose.connection.readyState, 
+            message: "Database connection failed. Check MONGODB_URI (password!) and Network Access (0.0.0.0/0)." 
+        });
+    }
+
+    try {
+        const lessons = await Lesson.countDocuments();
+        res.json({
+            status: "OK",
+            dbReadyState: mongoose.connection.readyState,
+            lessonsAvailable: lessons,
+            message: `API is running. MongoDB connection is active. ${lessons} lessons found.`
+        });
+    } catch (e) {
+         res.status(500).json({ 
+            status: "ERROR", 
+            dbReadyState: mongoose.connection.readyState, 
+            message: "Failed to read data from database during status check." 
+        });
+    }
+});
+
+// Root Route
 app.get('/', (req, res) => {
     res.send('EduNova Backend API is running 🚀');
 });
 
-// NEW: /status endpoint for debugging connectivity
-app.get('/status', async (req, res) => {
-    const connectionState = mongoose.connection.readyState;
-    const isConnected = connectionState === 1; // 1 means connected
 
-    try {
-        let lessonCount = 0;
-        if (isConnected) {
-            lessonCount = await Lesson.countDocuments();
-        }
-
-        res.json({
-            status: isConnected ? 'OK' : 'Database Disconnected',
-            dbReadyState: connectionState,
-            lessonsAvailable: lessonCount,
-            message: `API is running. MongoDB connection is ${isConnected ? 'active' : 'inactive'}. ${lessonCount} lessons found.`
-        });
-    } catch (error) {
-        // Handle errors during the countDocuments call (e.g., if connection drops)
-        res.status(500).json({ 
-            status: 'Error', 
-            message: 'Internal server error during status check.',
-            details: error.message 
-        });
-    }
-});
-
-// GET /lessons - Fetch all lessons
+// GET /lessons - Fetch all lessons (The specific route you need!)
 app.get('/lessons', async (req, res) => {
+    if (dbConnectionError) {
+        return res.status(503).json({ error: 'Database connection is unavailable.' });
+    }
     try {
-        // Fetch all documents from the lessons collection
-        const lessons = await Lesson.find({}); 
-        // Send the data as JSON
+        // Find all lessons in the collection
+        const lessons = await Lesson.find({});
+        // Send the JSON array back to the client
         res.json(lessons);
     } catch (err) {
         console.error("Error fetching lessons:", err);
-        // Send a 500 status code with an error message
         res.status(500).json({ error: 'Failed to fetch lessons' });
     }
 });
 
-// PUT /lessons/:id - Update lesson spaces 
+
+// GET /search - Search lessons by subject or location (REST C)
+app.get('/search', async (req, res) => {
+    if (dbConnectionError) {
+        return res.status(503).json({ error: 'Database connection is unavailable.' });
+    }
+    try {
+        const { query } = req.query; 
+        
+        if (!query) {
+            const lessons = await Lesson.find({});
+            return res.json(lessons);
+        }
+
+        const searchRegex = new RegExp(query, 'i'); 
+        
+        const lessons = await Lesson.find({
+            $or: [
+                { subject: searchRegex },
+                { location: searchRegex }
+            ]
+        });
+
+        res.json(lessons);
+    } catch (err) {
+        console.error("Error during search:", err);
+        res.status(500).json({ error: 'Failed to perform search' });
+    }
+});
+
+
+// PUT /lessons/:id - Update lesson spaces (REST C)
 app.put('/lessons/:id', async (req, res) => {
-    // ... (PUT route logic remains the same)
+    if (dbConnectionError) {
+        return res.status(503).json({ error: 'Database connection is unavailable.' });
+    }
     try {
         const lessonId = req.params.id;
-        const { spaces: newSpaces } = req.body; 
+        const { spaces: newSpaces } = req.body; // Destructure the expected 'spaces' field
         
         if (typeof newSpaces !== 'number' || newSpaces < 0) {
             return res.status(400).json({ error: 'Invalid spaces value' });
         }
+        
+        // Use ObjectId to validate ID format
+        new ObjectId(lessonId); 
 
         const lesson = await Lesson.findByIdAndUpdate(
             lessonId, 
             { spaces: newSpaces }, 
-            { new: true }
+            { new: true } 
         );
 
         if (!lesson) {
@@ -155,41 +201,42 @@ app.put('/lessons/:id', async (req, res) => {
 
         res.json({ message: 'Spaces updated successfully', lesson });
     } catch (err) {
+        if (err.name === 'BSONTypeError') {
+            return res.status(400).json({ error: 'Invalid Lesson ID format.' });
+        }
         console.error("Error updating lesson:", err);
         res.status(500).json({ error: 'Failed to update lesson' });
     }
 });
 
+// POST /orders - Create a new order and update lesson spaces (REST B)
 app.post('/orders', async (req, res) => {
-    // ... (POST route logic remains the same)
+    if (dbConnectionError) {
+        return res.status(503).json({ error: 'Database connection is unavailable.' });
+    }
     try {
-        const { name, phone, items, total } = req.body;
+        const { name, phone, lessonIDs, total } = req.body;
         
-        if (!Array.isArray(items) || items.length === 0) {
-            return res.status(400).json({ error: 'Order must contain at least one item.' });
+        if (!name || !phone || !lessonIDs || lessonIDs.length === 0) {
+             return res.status(400).json({ error: 'Missing required fields: name, phone, or lessons.' });
         }
-        
-        // 1. Create the new Order Document
-        const orderItems = items.map(item => ({
-            lessonId: item.lessonId, 
-            subject: item.subject,
-            price: item.price,
-            qty: item.qty
-        }));
 
+        // 1. Create the new order document
         const newOrder = new Order({
             name,
             phone,
-            items: orderItems, 
+            lessonIDs, // Array of {lessonId, qty} objects
             total,
             date: new Date()
         });
         await newOrder.save();
         
         // 2. Update lesson spaces using bulkWrite
-        const bulkOps = items.map(item => ({
+        const bulkOps = lessonIDs.map(item => ({
             updateOne: {
-                filter: { _id: new Types.ObjectId(item.lessonId) }, 
+                // Filter by lesson ID (Use mongoose.Types.ObjectId to ensure compatibility)
+                filter: { _id: new mongoose.Types.ObjectId(item.lessonId) }, 
+                // Decrement the spaces count
                 update: { $inc: { spaces: -item.qty } } 
             }
         }));
@@ -205,9 +252,6 @@ app.post('/orders', async (req, res) => {
     } catch (err) {
         console.error("Error creating order or updating lessons:", err);
         
-        if (err.name === 'ValidationError') {
-            return res.status(400).json({ error: `Validation Error: ${err.message}` });
-        }
         if (err.name === 'BSONTypeError') {
             return res.status(400).json({ error: 'A lesson ID provided in the order is invalid (BSON format).' });
         }
@@ -218,5 +262,10 @@ app.post('/orders', async (req, res) => {
 
 // --- Server Listener ---
 app.listen(port, () => {
-    console.log(`📡 EduNova Backend listening at http://localhost:${port}`);
+    console.log(`EduNova Backend listening on port ${port} 🚀`);
+    // Commit Tracker #11 (Total 5 more commits needed)
+    // Commit Tracker #12
+    // Commit Tracker #13
+    // Commit Tracker #14
+    // Commit Tracker #15
 });
