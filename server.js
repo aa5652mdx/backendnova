@@ -126,7 +126,7 @@ app.get('/', (req, res) => {
 });
 
 
-// GET /lessons - Fetch all lessons (The specific route you need!)
+// GET /lessons - Fetch all lessons
 app.get('/lessons', async (req, res) => {
     if (dbConnectionError) {
         return res.status(503).json({ error: 'Database connection is unavailable.' });
@@ -143,7 +143,7 @@ app.get('/lessons', async (req, res) => {
 });
 
 
-// GET /search - Search lessons by subject or location (REST C)
+// GET /search - Search lessons by subject or location
 app.get('/search', async (req, res) => {
     if (dbConnectionError) {
         return res.status(503).json({ error: 'Database connection is unavailable.' });
@@ -173,7 +173,7 @@ app.get('/search', async (req, res) => {
 });
 
 
-// PUT /lessons/:id - Update lesson spaces (REST C)
+// PUT /lessons/:id - Update lesson spaces
 app.put('/lessons/:id', async (req, res) => {
     if (dbConnectionError) {
         return res.status(503).json({ error: 'Database connection is unavailable.' });
@@ -209,7 +209,7 @@ app.put('/lessons/:id', async (req, res) => {
     }
 });
 
-// POST /orders - Create a new order and update lesson spaces (REST B)
+// POST /orders - Create a new order and update lesson spaces
 app.post('/orders', async (req, res) => {
     if (dbConnectionError) {
         return res.status(503).json({ error: 'Database connection is unavailable.' });
@@ -259,13 +259,22 @@ app.post('/orders', async (req, res) => {
     }
 });
 
+// GET /orders - Fetch all orders (for administrative/debugging purposes)
+app.get('/orders', async (req, res) => {
+    if (dbConnectionError) {
+        return res.status(503).json({ error: 'Database connection is unavailable.' });
+    }
+    try {
+        const orders = await Order.find({});
+        res.json(orders);
+    } catch (err) {
+        console.error("Error fetching orders:", err);
+        res.status(500).json({ error: 'Failed to fetch orders' });
+    }
+});
+
 
 // --- Server Listener ---
 app.listen(port, () => {
     console.log(`EduNova Backend listening on port ${port} 🚀`);
-    // Commit Tracker #11 (Total 5 more commits needed)
-    // Commit Tracker #12
-    // Commit Tracker #13
-    // Commit Tracker #14
-    // Commit Tracker #15
 });
