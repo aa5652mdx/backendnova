@@ -20,24 +20,38 @@ app.use(cors());
 // --- MongoDB Connection & Seeding ---
 if (!MONGODB_URI) {
     console.error('❌ FATAL ERROR: MONGODB_URI is not defined.');
-    // Exit if the critical environment variable is missing
     process.exit(1); 
 }
 
-// Attempt the connection, logging the result
-const dbConnectionPromise = mongoose.connect(MONGODB_URI, { 
+// ----------------------------------------------------
+// Robust Connection Logging
+// ----------------------------------------------------
+mongoose.connect(MONGODB_URI, { 
     ssl: true,
-    // Give Render more time to establish the connection
     serverSelectionTimeoutMS: 10000 
-}) 
-    .then(() => console.log('✅ Connected to MongoDB: edunovaDB'))
-    .catch(err => {
-        // This log MUST appear in Render's logs if the connection fails
-        console.error('❌ FAILED TO CONNECT TO MONGODB. CHECK MONGODB_URI AND NETWORK ACCESS:', err.message);
-        dbConnectionError = true; 
-        // DO NOT EXIT: allow the server to start, but block API access
-    });
+});
 
+const db = mongoose.connection;
+
+db.on('error', (err) => {
+    console.error('❌ FAILED TO CONNECT TO MONGODB (ERROR EVENT). CHECK MONGODB_URI AND NETWORK ACCESS:', err.message);
+    dbConnectionError = true;
+});
+
+db.once('connected', () => {
+    console.log('✅ Connected to MongoDB: edunovaDB');
+    dbConnectionError = false;
+});
+
+const dbConnectionPromise = new Promise((resolve, reject) => {
+    db.once('connected', resolve);
+    db.once('error', reject);
+    setTimeout(() => {
+        if (db.readyState !== 1) { 
+            reject(new Error("MongoDB connection timeout reached. Check network access."));
+        }
+    }, 15000);
+});
 
 // --- Schemas ---
 const Lesson = mongoose.model('Lesson', {
@@ -49,10 +63,12 @@ const Lesson = mongoose.model('Lesson', {
     description: String
 });
 
+// *** FIX: Ensure the schema uses 'lessonIDs' to match the frontend payload (main.js) ***
 const Order = mongoose.model('Order', {
     name: String,
     phone: String,
-    lessonIDs: Array,
+    // The lessonIDs array now holds objects like: { lessonId: <ID>, qty: <Number> }
+    lessonIDs: Array, 
     total: Number,
     date: Date
 });
@@ -60,8 +76,8 @@ const Order = mongoose.model('Order', {
 // --- Database Seeding Function ---
 const seedDatabase = async () => {
     try {
-        await dbConnectionPromise; // Wait for the connection attempt to resolve
-        if (dbConnectionError) return; // Stop seeding if connection failed
+        await dbConnectionPromise;
+        if (dbConnectionError) return;
 
         const lessonCount = await Lesson.countDocuments();
         if (lessonCount === 0) {
@@ -83,23 +99,22 @@ const seedDatabase = async () => {
         }
     } catch (error) {
         console.error('❌ Error during database seeding/check:', error.message);
+        dbConnectionError = true;
     }
 };
 
-// Start the seeding process
 seedDatabase();
 
 
 // --- Routes ---
 
-// Health Check Route (Crucial for verifying database connection status)
+// Health Check Route
 app.get('/status', async (req, res) => {
-    // Return 503 if the connection failed
     if (dbConnectionError) {
         return res.status(503).json({ 
             status: "ERROR", 
             dbReadyState: mongoose.connection.readyState, 
-            message: "Database connection failed. Check MONGODB_URI (password!) and Network Access (0.0.0.0/0)." 
+            message: "Database connection failed. Check MONGODB_URI and Network Access (0.0.0.0/0)." 
         });
     }
 
@@ -132,9 +147,7 @@ app.get('/lessons', async (req, res) => {
         return res.status(503).json({ error: 'Database connection is unavailable.' });
     }
     try {
-        // Find all lessons in the collection
         const lessons = await Lesson.find({});
-        // Send the JSON array back to the client
         res.json(lessons);
     } catch (err) {
         console.error("Error fetching lessons:", err);
@@ -180,13 +193,13 @@ app.put('/lessons/:id', async (req, res) => {
     }
     try {
         const lessonId = req.params.id;
-        const { spaces: newSpaces } = req.body; // Destructure the expected 'spaces' field
+        const { spaces: newSpaces } = req.body;
         
         if (typeof newSpaces !== 'number' || newSpaces < 0) {
             return res.status(400).json({ error: 'Invalid spaces value' });
         }
         
-        // Use ObjectId to validate ID format
+        // Check if ID is a valid BSON object ID format
         new ObjectId(lessonId); 
 
         const lesson = await Lesson.findByIdAndUpdate(
@@ -214,48 +227,57 @@ app.post('/orders', async (req, res) => {
     if (dbConnectionError) {
         return res.status(503).json({ error: 'Database connection is unavailable.' });
     }
+    
+    // Log the incoming request body for structure debugging
+    console.log("--- Received Order Request Body ---", JSON.stringify(req.body, null, 2));
+
     try {
+        // *** CRITICAL FIX 1: Use 'lessonIDs' to match frontend payload ***
         const { name, phone, lessonIDs, total } = req.body;
         
         if (!name || !phone || !lessonIDs || lessonIDs.length === 0) {
+            console.error("*** ORDER FAILED: Missing essential fields (name, phone, or lessonIDs).");
              return res.status(400).json({ error: 'Missing required fields: name, phone, or lessons.' });
         }
-
+        
         // 1. Create the new order document
         const newOrder = new Order({
             name,
             phone,
-            lessonIDs, // Array of {lessonId, qty} objects
+            lessonIDs: lessonIDs,
             total,
             date: new Date()
         });
-        await newOrder.save();
+        await newOrder.save(); 
         
         // 2. Update lesson spaces using bulkWrite
-        const bulkOps = lessonIDs.map(item => ({
-            updateOne: {
-                // Filter by lesson ID (Use mongoose.Types.ObjectId to ensure compatibility)
-                filter: { _id: new mongoose.Types.ObjectId(item.lessonId) }, 
-                // Decrement the spaces count
-                update: { $inc: { spaces: -item.qty } } 
-            }
-        }));
+        const bulkOps = lessonIDs.map(item => {
+            return ({
+                updateOne: {
+                    // *** CRITICAL FIX 2: Ensure BSON compatibility for the ID ***
+                    filter: { _id: new mongoose.Types.ObjectId(item.lessonId) }, 
+                    // Decrement the spaces count
+                    update: { $inc: { spaces: -item.qty } } 
+                }
+            });
+        });
 
         await Lesson.bulkWrite(bulkOps);
 
         // 3. Respond with success
         res.status(201).json({ 
-            message: 'Order created and lesson spaces updated successfully', 
+            message: 'Your order has been successfully placed. We will contact you soon!', 
             order: newOrder 
         });
 
     } catch (err) {
-        console.error("Error creating order or updating lessons:", err);
+        console.error(`*** ORDER FAILED:`, err.message);
+        console.error(`*** FULL ERROR OBJECT:`, err);
         
         if (err.name === 'BSONTypeError') {
-            return res.status(400).json({ error: 'A lesson ID provided in the order is invalid (BSON format).' });
+            return res.status(400).json({ error: 'A lesson ID provided in the order is invalid (BSON format). Check your item IDs.' });
         }
-        res.status(500).json({ error: 'Failed to create order or update lessons' });
+        res.status(500).json({ error: 'Failed to create order or update lessons. Check server logs for details.' });
     }
 });
 
@@ -265,6 +287,7 @@ app.get('/orders', async (req, res) => {
         return res.status(503).json({ error: 'Database connection is unavailable.' });
     }
     try {
+        // Fetch all orders
         const orders = await Order.find({});
         res.json(orders);
     } catch (err) {
@@ -273,6 +296,12 @@ app.get('/orders', async (req, res) => {
     }
 });
 
+
+// Commit Tracker #16
+// Commit Tracker #17
+// Commit Tracker #18
+// Commit Tracker #19
+// Commit Tracker #20
 
 // --- Server Listener ---
 app.listen(port, () => {
